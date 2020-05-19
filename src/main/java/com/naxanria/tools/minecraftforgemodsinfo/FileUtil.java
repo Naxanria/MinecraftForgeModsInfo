@@ -38,6 +38,7 @@ public class FileUtil
         files.add(p);
       }
       
+      ds.close();
       return files;
     }
     catch (IOException e)
@@ -63,7 +64,7 @@ public class FileUtil
       {
         dirs.add(p);
       }
-    
+      ds.close();
       return dirs;
     }
     catch (IOException e)
