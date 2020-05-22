@@ -1,11 +1,7 @@
 package com.naxanria.tools.minecraftforgemodsinfo;
 
-import com.electronwill.nightconfig.core.Config;
-import com.electronwill.nightconfig.core.file.FileConfig;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
+import com.google.gson.*;
+import com.google.gson.stream.JsonReader;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -14,8 +10,6 @@ import java.nio.file.*;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Optional;
-import java.util.stream.Collectors;
 
 /*
   @author: Naxanria
@@ -124,6 +118,27 @@ public class FileUtil
     return Collections.emptyList();
   }
   
+  
+  public static JsonArray getMcModInfo(Path jarPath)
+  {
+    try (FileSystem system = getSystemFor(jarPath))
+    {
+      if (system == null)
+      {
+        return new JsonArray();
+      }
+  
+      JsonElement element = JsonParser.parseString(String.join("\n", Files.readAllLines(system.getPath("mcmod.info"))));
+  
+      return element instanceof JsonArray ? (JsonArray) element : new JsonArray();
+    }
+    catch (IOException e)
+    {
+      e.printStackTrace();
+    }
+    return new JsonArray();
+  }
+  
   public static String getModVersion(Path jarPath)
   {
     try (FileSystem system = getSystemFor(jarPath))
@@ -204,7 +219,6 @@ public class FileUtil
     
     return true;
   }
-  
   
   public static class DirectoryFilter implements DirectoryStream.Filter<Path>
   {

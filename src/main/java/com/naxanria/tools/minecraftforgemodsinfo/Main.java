@@ -5,6 +5,9 @@ import com.electronwill.nightconfig.core.conversion.ObjectConverter;
 import com.electronwill.nightconfig.toml.TomlParser;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.naxanria.tools.minecraftforgemodsinfo.parser.ParserContext;
+import com.naxanria.tools.minecraftforgemodsinfo.parser.ParserVersion;
+import com.naxanria.tools.minecraftforgemodsinfo.parser.v1_12.InfoParser;
 import org.apache.commons.cli.*;
 
 import java.nio.file.Path;
@@ -39,6 +42,9 @@ public class Main
       .argName("help").desc("provides help")
       .build();
     options.addOption(help);
+    
+    Option version = new Option("mc", "mc-version", true, "The version of Minecraft to target");
+    options.addOption(version);
   
     HelpFormatter formatter = new HelpFormatter();
     CommandLineParser parser = new DefaultParser();
@@ -62,11 +68,41 @@ public class Main
       formatter.printHelp("utility-name", options);
       return;
     }
+  
+    ParserContext context = ParserContext.getCurrentContext();
     
     String localFile = cmd.hasOption("-input") ? cmd.getOptionValue("-inputs") : ".";
-    Path local = Paths.get(localFile);
+    
     String saveFile = cmd.hasOption("-output") ? cmd.getOptionValue("output") : "modsInfo.json";
+    
+    String v = cmd.hasOption(version.getOpt()) ? cmd.getOptionValue(version.getOpt()) : "1.15";
+    if (v.equals("1.15"))
+    {
+      context.version = ParserVersion.ONE_FIFTEEN;
+    }
+    else if (v.equals("1.12"))
+    {
+      context.version = ParserVersion.ONE_TWELVE;
+    }
+    else
+    {
+      Logger.err("Not a valid version to parse: {}", v);
+      Logger.err("Valid versions are \"1.12\", \"1.15\"");
+      
+      return;
+    }
+    
+    context.saveFile = saveFile;
+    context.localFile = localFile;
+    
+    process();
+  }
   
+  private static void process()
+  {
+    ParserContext context = ParserContext.getCurrentContext();
+    Path local = Paths.get(context.localFile);
+    
     List<Path> directories = FileUtil.getDirectories(local);
     Optional<Path> mods = directories.stream().filter(path -> FileUtil.getName(path).equals("mods")).findFirst();
     
@@ -74,83 +110,137 @@ public class Main
     
     if (!mods.isPresent())
     {
-      print("Could not find mods folder. Using root folder.");
+      Logger.info("Could not find mods folder. Using root folder.");
       modsPath = local;
     }
     else
     {
       modsPath = mods.get();
     }
-  
+    
     List<Path> files = FileUtil.getFiles(modsPath).stream().filter(path -> FileUtil.isExtension(path, ".jar")).collect(Collectors.toList());
     
     if (files.isEmpty())
     {
-      print("Could not find any jar files!");
+      Logger.info("Could not find any jar files!");
     }
     else
     {
-      List<ModInfo> modInfoList = new ArrayList<>();
-      
-      files.forEach(path ->
+      if (context.version == ParserVersion.ONE_FIFTEEN)
       {
-        print("Checking " + path);
-        List<String> tomlUnParsed = FileUtil.getToml(path);
-        CommentedConfig parsed = parse(tomlUnParsed);
-        ObjectConverter converter = new ObjectConverter();
-        ModInfo modInfo = converter.toObject(parsed, ModInfo::new);
-        modInfo.setFileName(FileUtil.getName(path));
-        
-        ArrayList<?> list = parsed.get("mods");
-        if (list != null && list.size() > 0)
-        {
-          if (list.get(0) instanceof CommentedConfig)
-          {
-            ModInfoMods modInfoMods = converter.toObject((CommentedConfig) list.get(0), ModInfoMods::new);
-            modInfo.setMods(modInfoMods);
-          }
-        }
-        
-        if (modInfo.getMods() == null)
-        {
-          print("Invalid format");
-        }
-        else
-        {
-          if (modInfo.getMods().getVersion().equals("${file.jarVersion}"))
-          {
-            modInfo.getMods().setVersion(FileUtil.getModVersion(path));
-          }
-          
-          modInfoList.add(modInfo);
-        }
-      });
-      
-      print("Sorting");
-      modInfoList.sort((o1, o2) -> o1.getMods().getDisplayName().compareToIgnoreCase(o2.getMods().getDisplayName()));
-      
-      print("Creating json");
-      JsonArray array = new JsonArray();
-      for (ModInfo modInfo: modInfoList)
+        parse_1_15(files);
+      }
+      else if (context.version == ParserVersion.ONE_TWELVE)
       {
-        array.add(toObject(modInfo));
+        parse_1_12(files);
+      }
+  
+      Logger.info("Finished");
+    }
+  }
+  
+  private static void parse_1_12(List<Path> files)
+  {
+    ParserContext context = ParserContext.getCurrentContext();
+    List<JsonObject> objects = new ArrayList<>();
+    
+    files.forEach(path ->
+    {
+      Logger.info("Checking " + path);
+      context.currentFile = path.toString();
+  
+      JsonArray mcModInfo = FileUtil.getMcModInfo(path);
+      List<JsonObject> parse = InfoParser.parse(mcModInfo);
+      objects.addAll(parse);
+    });
+    
+    Logger.info("sorting");
+    
+    objects.sort((o1, o2) ->
+    {
+      String name1 = o1.get("name").getAsString();
+      String name2 = o2.get("name").getAsString();
+      
+      return name1.compareToIgnoreCase(name2);
+    });
+  
+    Logger.info("Creating json");
+    JsonArray array = new JsonArray();
+    
+    objects.forEach(array::add);
+    
+    save(array);
+  }
+  
+  private static void parse_1_15(List<Path> files)
+  {
+    ParserContext context = ParserContext.getCurrentContext();
+    List<ModInfo> modInfoList = new ArrayList<>();
+    
+    files.forEach(path ->
+    {
+      Logger.info("Checking " + path);
+      context.currentFile = path.toString();
+      
+      List<String> tomlUnParsed = FileUtil.getToml(path);
+      CommentedConfig parsed = parse(tomlUnParsed);
+      ObjectConverter converter = new ObjectConverter();
+      ModInfo modInfo = converter.toObject(parsed, ModInfo::new);
+      modInfo.setFileName(FileUtil.getName(path));
+      
+      ArrayList<?> list = parsed.get("mods");
+      if (list != null && list.size() > 0)
+      {
+        if (list.get(0) instanceof CommentedConfig)
+        {
+          ModInfoMods modInfoMods = converter.toObject((CommentedConfig) list.get(0), ModInfoMods::new);
+          modInfo.setMods(modInfoMods);
+        }
       }
       
-      
-      print("saving to " + saveFile);
-      
-      FileUtil.save(array, Paths.get(saveFile));
-      
-      print("Finished");
+      if (modInfo.getMods() == null)
+      {
+        Logger.info("Invalid format");
+      }
+      else
+      {
+        if (modInfo.getMods().getVersion().equals("${file.jarVersion}"))
+        {
+          modInfo.getMods().setVersion(FileUtil.getModVersion(path));
+        }
+        
+        modInfoList.add(modInfo);
+      }
+    });
+    
+    Logger.info("Sorting");
+    modInfoList.sort((o1, o2) -> o1.getMods().getDisplayName().compareToIgnoreCase(o2.getMods().getDisplayName()));
+    
+    Logger.info("Creating json");
+    JsonArray array = new JsonArray();
+    for (ModInfo modInfo: modInfoList)
+    {
+      array.add(toObject(modInfo));
     }
+  
+    save(array);
+  }
+  
+  private static void save(JsonArray array)
+  {
+    ParserContext context = ParserContext.getCurrentContext();
+    String saveFile = context.saveFile;
+    Logger.info("saving to " + saveFile);
+    
+    FileUtil.save(array, Paths.get(saveFile));
   }
   
   private static void help()
   {
-    print("This tool creates a json file with the mod information in a pack");
-    print("It will search for a \"mods\" folder, if it can not find it, ");
-    print("it will search in given folder (default local folder)");
-    print("");
+    Logger.info("This tool creates a json file with the mod information in a pack");
+    Logger.info("It will search for a \"mods\" folder, if it can not find it, ");
+    Logger.info("it will search in given folder (default local folder)");
+    Logger.info("");
   }
   
   private static CommentedConfig parse(List<String> toml)
@@ -198,10 +288,5 @@ public class Main
     {
       object.addProperty(key, value);
     }
-  }
-  
-  public static void print(Object obj)
-  {
-    System.out.println(obj);
   }
 }
